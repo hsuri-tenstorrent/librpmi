@@ -70,7 +70,7 @@ static struct rpmi_test_scenario scenario_base_default = {
 	.init = test_scenario_default_init,
 	.cleanup = test_scenario_default_cleanup,
 
-	.num_tests = 7,
+	.num_tests = 8,
 	.tests = {
 		{
 			.name = "RPMI_BASE_SRV_ENABLE_NOTIFICATION",
@@ -149,6 +149,17 @@ static struct rpmi_test_scenario scenario_base_default = {
 				.flags = RPMI_MSG_NORMAL_REQUEST,
 				.expected_data = attribs_expdata_default,
 				.expected_data_len = sizeof(attribs_expdata_default),
+			},
+			.init_expected_data = test_init_expected_data_from_attrs,
+		},
+		{
+			.name = "RPMI_INVALID_SRVGRP",
+			.attrs = {
+				.servicegroup_id = RPMI_SRVGRP_SYSTEM_SUSPEND,
+				.service_id = RPMI_SYSSUSP_SRV_ENABLE_NOTIFICATION,
+				.flags = RPMI_MSG_NORMAL_REQUEST,
+				.expected_data = enable_notif_expdata_default,
+				.expected_data_len = sizeof(enable_notif_expdata_default),
 			},
 			.init_expected_data = test_init_expected_data_from_attrs,
 		},

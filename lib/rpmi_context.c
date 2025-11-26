@@ -292,7 +292,7 @@ static void rpmi_base_group_destroy(struct rpmi_service_group *group)
 	rpmi_env_free(group->priv);
 }
 
-static enum rpmi_error rpmi_service_notsupp_a2p_request(struct rpmi_service_group *group,
+static enum rpmi_error rpmi_group_or_service_notsupp_a2p_request(struct rpmi_service_group *group,
 							struct rpmi_service *service,
 							struct rpmi_transport *trans,
 							rpmi_uint16_t request_datalen,
@@ -325,59 +325,65 @@ void rpmi_context_process_a2p_request(struct rpmi_context *cntx)
 	rmsg = cntx->req_msg;
 	amsg = cntx->ack_msg;
 	while (!rpmi_transport_dequeue(trans, RPMI_QUEUE_A2P_REQ, rmsg)) {
-		group = rpmi_context_find_group(cntx, rmsg->header.servicegroup_id);
-		if (!group) {
-			DPRINTF("%s: %s: service group ID 0x%x not found\n",
-				__func__, cntx->name, rmsg->header.servicegroup_id);
-			continue;
-		}
-
-		service = NULL;
-		if (rmsg->header.service_id < group->max_service_id)
-			service = &group->services[rmsg->header.service_id];
-
 		amsg->header.flags = RPMI_MSG_ACKNOWLDGEMENT;
 		amsg->header.service_id = rmsg->header.service_id;
 		amsg->header.servicegroup_id = rmsg->header.servicegroup_id;
 		amsg->header.datalen = 0;
 		amsg->header.token = rmsg->header.token;
 
-		do_process = false;
+		service = NULL;
 		do_acknowledge = false;
-		switch (rmsg->header.flags & RPMI_MSG_FLAGS_TYPE) {
-		case RPMI_MSG_NORMAL_REQUEST:
-			do_process = true;
-			do_acknowledge = true;
-			break;
-		case RPMI_MSG_POSTED_REQUEST:
-			do_process = true;
-			break;
-		case RPMI_MSG_ACKNOWLDGEMENT:
-			DPRINTF("%s: %s: group %s ignoring acknowledgment from a2p queue\n",
-				__func__, cntx->name, group->name);
-			break;
-		case RPMI_MSG_NOTIFICATION:
-			DPRINTF("%s: %s: group %s can't handle notification from a2p queue\n",
-				__func__, cntx->name, group->name);
-			break;
-		default:
-			break;
+
+		group = rpmi_context_find_group(cntx, rmsg->header.servicegroup_id);
+		if (!group) {
+			DPRINTF("%s: %s: service group ID 0x%x not found\n",
+				__func__, cntx->name, rmsg->header.servicegroup_id);
+			rc = rpmi_group_or_service_notsupp_a2p_request(group, service, trans,
+							rmsg->header.datalen, rmsg->data,
+							&amsg->header.datalen, amsg->data);
+			if (rmsg->header.flags ==  RPMI_MSG_NORMAL_REQUEST) {
+				do_acknowledge = true;
+            }
+		} else {
+			if (rmsg->header.service_id < group->max_service_id)
+				service = &group->services[rmsg->header.service_id];
+
+			do_process = false;
+			switch (rmsg->header.flags & RPMI_MSG_FLAGS_TYPE) {
+			case RPMI_MSG_NORMAL_REQUEST:
+				do_process = true;
+				do_acknowledge = true;
+				break;
+			case RPMI_MSG_POSTED_REQUEST:
+				do_process = true;
+				break;
+			case RPMI_MSG_ACKNOWLDGEMENT:
+				DPRINTF("%s: %s: group %s ignoring acknowledgment from a2p queue\n",
+					__func__, cntx->name, group->name);
+				break;
+			case RPMI_MSG_NOTIFICATION:
+				DPRINTF("%s: %s: group %s can't handle notification from a2p queue\n",
+					__func__, cntx->name, group->name);
+				break;
+			default:
+				break;
+			}
+
+			if (!do_process)
+				continue;
+
+			rpmi_env_lock(group->lock);
+			if (service && service->process_a2p_request &&
+			    rmsg->header.datalen >= service->min_a2p_request_datalen)
+				rc = service->process_a2p_request(group, service, trans,
+							rmsg->header.datalen, rmsg->data,
+							&amsg->header.datalen, amsg->data);
+			else
+				rc = rpmi_group_or_service_notsupp_a2p_request(group, service, trans,
+							rmsg->header.datalen, rmsg->data,
+							&amsg->header.datalen, amsg->data);
+			rpmi_env_unlock(group->lock);
 		}
-
-		if (!do_process)
-			continue;
-
-		rpmi_env_lock(group->lock);
-		if (service && service->process_a2p_request &&
-		    rmsg->header.datalen >= service->min_a2p_request_datalen)
-			rc = service->process_a2p_request(group, service, trans,
-							rmsg->header.datalen, rmsg->data,
-							&amsg->header.datalen, amsg->data);
-		else
-			rc = rpmi_service_notsupp_a2p_request(group, service, trans,
-							rmsg->header.datalen, rmsg->data,
-							&amsg->header.datalen, amsg->data);
-		rpmi_env_unlock(group->lock);
 
 		if (rc) {
 			DPRINTF("%s: %s: group %s a2p request failed (error %d)\n",
@@ -406,7 +412,8 @@ void rpmi_context_process_a2p_request(struct rpmi_context *cntx)
 
 		if (rc) {
 			DPRINTF("%s: %s: group %s p2a acknowledgment failed (error %d)\n",
-				__func__, cntx->name, group->name, rc);
+				__func__, cntx->name, group == NULL ?
+				"invalid group" : group->name, rc);
 		}
 
 		if ((rmsg->header.flags & RPMI_MSG_FLAGS_DOORBELL) &&
